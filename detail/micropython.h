@@ -12,6 +12,7 @@
 
 namespace upywrap
 {
+#if UPYWRAP_STATICPYOBJ_USE_ROOTPTR
   /**
   * @brief This is the global map in the micropython state which is used to store the class types and function pointers.
   *
@@ -35,6 +36,7 @@ namespace upywrap
       reset_mpy_wrap_global_map();
     }
   }
+#endif
 
   inline mp_obj_t new_qstr( qstr what )
   {
