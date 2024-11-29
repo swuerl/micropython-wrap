@@ -77,26 +77,36 @@ namespace upywrap
     ClassWrapper( const char* name, mp_obj_dict_t* dict, decltype( mp_obj_type_t::flags ) flags = 0 ) :
       ClassWrapper( name, flags )
     {
-      mp_obj_dict_store( dict, new_qstr( name ), type_ptr );
-      mp_obj_dict_store( dict, new_qstr( ( std::string( name ) + "_locals" ).data() ), MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( type_ptr, locals_dict ) ) );
+      mp_obj_dict_store( dict, new_qstr( name ), FullTypePtr() );
+      mp_obj_dict_store( dict, new_qstr( ( std::string( name ) + "_locals" ).data() ), MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( FullTypePtr(), locals_dict ) ) );
     }
 
     //Initialize the type, storing the locals in StaticPyObjectStore to prevent GC collection.
     ClassWrapper( const char* name, ConstructorOptions, decltype( mp_obj_type_t::flags ) flags = 0 ) :
       ClassWrapper( name, flags )
     {
-      StaticPyObjectStore::Store( MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( type_ptr, locals_dict ) ) );
+      StaticPyObjectStore::Store( MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( FullTypePtr(), locals_dict ) ) );
+    }
+
+    static mp_obj_full_type_t* FullTypePtr()
+    {
+      return type_ptr;
+    }
+
+    static const mp_obj_full_type_t& FullType()
+    {
+      return *FullTypePtr();
     }
 
     static const mp_obj_type_t& Type()
     {
-      return *((const mp_obj_type_t*) type_ptr);
+      return (const mp_obj_type_t&) FullType();
     }
 
     template< class A >
     void StoreClassVariable( const char* name, const A& value )
     {
-      mp_obj_dict_store( MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( type_ptr, locals_dict ) ), new_qstr( name ), ToPy( value ) );
+      mp_obj_dict_store( MP_OBJ_FROM_PTR( MP_OBJ_TYPE_GET_SLOT( FullTypePtr(), locals_dict ) ), new_qstr( name ), ToPy( value ) );
     }
 
     template< index_type name, class Ret, class... A >
@@ -313,7 +323,7 @@ namespace upywrap
       assert( p );
       CheckTypeIsRegistered();
       auto o = (this_type*) m_malloc_with_finaliser( sizeof( this_type ) );
-      o->base.type = (const mp_obj_type_t*) type_ptr;
+      o->base.type = (const mp_obj_type_t*) &Type();
       o->cookie = defCookie;
 #if UPYWRAP_FULLTYPECHECK
       o->typeId = &typeid( T );
@@ -329,7 +339,7 @@ namespace upywrap
     static ClassWrapper< T >* AsNativeObjCheckedImpl( mp_obj_t arg )
     {
       auto native = (this_type*) MP_OBJ_TO_PTR( arg );
-      if( !mp_obj_is_exact_type( arg, (const mp_obj_type_t*) type_ptr ) )
+      if( !mp_obj_is_exact_type( arg, (const mp_obj_type_t*) &Type() ) )
       {
         //If whatever gets passed in doesn't remotely look like an object bail out.
         //Otherwise it's possible we're being passed an arbitrary 'opaque' ClassWrapper (so the cookie mathches)
@@ -389,7 +399,7 @@ namespace upywrap
         }
       }
       CheckTypeIsRegistered(); //since we want to access type.name
-      RaiseTypeException( arg, qstr_str( type_ptr->name ) );
+      RaiseTypeException( arg, qstr_str( FullType().name ) );
 #if !defined( _MSC_VER ) || defined( _DEBUG )
       return nullptr;
 #endif
@@ -430,10 +440,10 @@ namespace upywrap
       if( !init )
       {
         OneTimeInit( name );
-        type_ptr->flags = flags;
+        FullTypePtr()->flags = flags;
         init = true;
       }
-      else if( type_ptr->flags != flags )
+      else if( FullType().flags != flags )
       {
         RaiseTypeException( "ClassWrapper's type flags can only be set once" );
       }
@@ -502,14 +512,14 @@ namespace upywrap
       const auto attrValue = FindAttrMaybe( map, attr );
       if( !attrValue )
       {
-        RaiseAttributeException( type_ptr->name, attr );
+        RaiseAttributeException( FullType().name, attr );
       }
       return attrValue;
     }
 
     static mp_map_elem_t* LookupLocal( qstr attr )
     {
-      auto locals_map = &( (mp_obj_dict_t*) MP_OBJ_TYPE_GET_SLOT( type_ptr, locals_dict ) )->map;
+      auto locals_map = &( (mp_obj_dict_t*) MP_OBJ_TYPE_GET_SLOT( FullTypePtr(), locals_dict ) )->map;
       return mp_map_lookup( locals_map, new_qstr( attr ), MP_MAP_LOOKUP );
     }
 
@@ -620,7 +630,7 @@ namespace upywrap
     void OneTimeInit( const char* name )
     {
       type_ptr = new mp_obj_full_type_t({});
-      mp_obj_full_type_t& type = *type_ptr;
+      mp_obj_full_type_t& type = *FullTypePtr();
 
       type.base.type = &mp_type_type;
       type.name = static_cast< decltype( type.name ) >( qstr_from_str( name ) );
@@ -647,7 +657,7 @@ namespace upywrap
 
     static void CheckTypeIsRegistered()
     {
-      if( type_ptr->base.type == nullptr )
+      if( FullType().base.type == nullptr )
       {
 #if UPYWRAP_HAS_TYPEID
         std::string errorMessage( std::string( "Native type " ) + typeid( T ).name() + " has not been registered" );
@@ -660,7 +670,7 @@ namespace upywrap
 
     void AddFunctionToTable( const qstr name, mp_obj_t fun )
     {
-      mp_obj_dict_store( MP_OBJ_TYPE_GET_SLOT( type_ptr, locals_dict ), new_qstr( name ), fun );
+      mp_obj_dict_store( MP_OBJ_TYPE_GET_SLOT( FullTypePtr(), locals_dict ), new_qstr( name ), fun );
     }
 
     void AddFunctionToTable( const char* name, mp_obj_t fun )
@@ -679,7 +689,7 @@ namespace upywrap
       AddFunctionToTable( name(), call_type::CreateUPyFunction( *callerObject ) );
       if( std::string( name() ) == "__call__" )
       {
-        MP_OBJ_TYPE_SET_SLOT( type_ptr, call, instance_call, 5 );
+        MP_OBJ_TYPE_SET_SLOT( FullTypePtr(), call, instance_call, 5 );
       }
     }
 
@@ -708,7 +718,7 @@ namespace upywrap
       auto caller = call_type::CreateCaller( f );
       caller->arguments = std::move( arguments );
       functionPointers[ (void*) name ] = caller;
-      MP_OBJ_TYPE_SET_SLOT( type_ptr, make_new, call_type::MakeNew, 0 );
+      MP_OBJ_TYPE_SET_SLOT( FullTypePtr(), make_new, call_type::MakeNew, 0 );
     }
 
     template< index_type name, class Fun, class Ret, class... A >
